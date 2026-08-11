@@ -1,0 +1,279 @@
+# =============================================================================
+# EXPECTATIONS — independently-computed values for the validation gate
+# =============================================================================
+# Every "expected" value below was computed in a pandas one-off, reading the
+# three source .xlsx files directly, NOT by reusing any SQL from queries.yaml
+# or calling run_query.py. The point of this file is to catch a bug that
+# exists in BOTH the SQL and the pandas cross-check equally little chance of
+# happening if the two were computed independently and by different people
+# using different tools. If this file had simply re-run the same SQL and
+# stored its output, it would validate nothing except "DuckDB returns the
+# same answer twice."
+# =============================================================================
+
+version: 1
+depends_on: queries.yaml
+
+tolerances:
+  currency: 0.01
+  percent: 0.01
+  count: 0
+  days: 0.01
+
+expectations:
+
+  - id: total_sales
+    query_id: total_sales
+    params: {}
+    computed_independently_via: "pandas: orders_df['sales'].sum()"
+    result_shape: single_row
+    expected:
+      total_sales: {value: 5826.893, kind: currency}
+
+  - id: total_profit
+    query_id: total_profit
+    params: {}
+    computed_independently_via: "pandas: orders_df['profit'].sum()"
+    result_shape: single_row
+    expected:
+      total_profit: {value: 1362.5141, kind: currency}
+
+  - id: profit_margin_pct
+    query_id: profit_margin_pct
+    params: {}
+    computed_independently_via: "pandas: orders_df['profit'].sum() / orders_df['sales'].sum() * 100"
+    result_shape: single_row
+    expected:
+      profit_margin_pct: {value: 23.383201, kind: percent}
+
+  - id: order_count
+    query_id: order_count
+    params: {}
+    computed_independently_via: "pandas: orders_df['order_id'].nunique()"
+    result_shape: single_row
+    expected:
+      order_count: {value: 13, kind: count}
+
+  - id: order_count_date_filtered
+    query_id: order_count
+    params: {start: "2021-01-01", end: "2021-01-10"}
+    computed_independently_via: "pandas: orders_df[(orders_df['order_date'] >= '2021-01-01') & (orders_df['order_date'] <= '2021-01-10')]['order_id'].nunique()"
+    result_shape: single_row
+    expected:
+      order_count: {value: 9, kind: count}
+
+  - id: line_item_count
+    query_id: line_item_count
+    params: {}
+    computed_independently_via: "pandas: len(orders_df)"
+    result_shape: single_row
+    expected:
+      line_item_count: {value: 25, kind: count}
+
+  - id: units_sold
+    query_id: units_sold
+    params: {}
+    computed_independently_via: "pandas: orders_df['quantity'].sum()"
+    result_shape: single_row
+    expected:
+      units_sold: {value: 78, kind: count}
+
+  - id: average_order_value
+    query_id: average_order_value
+    params: {}
+    computed_independently_via: "pandas: orders_df['sales'].sum() / orders_df['order_id'].nunique()"
+    result_shape: single_row
+    expected:
+      average_order_value: {value: 448.222538, kind: currency}
+
+  - id: average_line_item_value
+    query_id: average_line_item_value
+    params: {}
+    computed_independently_via: "pandas: orders_df['sales'].sum() / len(orders_df)"
+    result_shape: single_row
+    expected:
+      average_line_item_value: {value: 233.07572, kind: currency}
+
+  - id: average_discount_rate
+    query_id: average_discount_rate
+    params: {}
+    computed_independently_via: "pandas: orders_df['discount'].mean()"
+    result_shape: single_row
+    expected:
+      average_discount_rate: {value: 0.17, kind: percent}
+
+  - id: customer_count
+    query_id: customer_count
+    params: {}
+    computed_independently_via: "pandas: customers_df['customer_id'].nunique()"
+    result_shape: single_row
+    expected:
+      customer_count: {value: 13, kind: count}
+
+  - id: customer_count_segment_filtered
+    query_id: customer_count
+    params: {segment: "Consumer"}
+    computed_independently_via: "pandas: customers_df[customers_df['segment'] == 'Consumer']['customer_id'].nunique()"
+    result_shape: single_row
+    expected:
+      customer_count: {value: 9, kind: count}
+
+  - id: active_customer_count
+    query_id: active_customer_count
+    params: {}
+    computed_independently_via: "pandas: orders_df['customer_id'].nunique()"
+    result_shape: single_row
+    expected:
+      active_customer_count: {value: 13, kind: count}
+
+  - id: average_days_to_ship
+    query_id: average_days_to_ship
+    params: {}
+    computed_independently_via: "pandas: orders_df.drop_duplicates(subset='order_id').assign(days=lambda d: (d['ship_date'] - d['order_date']).dt.days)['days'].mean()"
+    result_shape: single_row
+    expected:
+      average_days_to_ship: {value: 4.0, kind: days}
+
+  - id: sales_by_category
+    query_id: sales_by_category
+    params: {}
+    computed_independently_via: "pandas: merged.groupby('category')['sales'].sum()"
+    result_shape: multi_row
+    row_key: category
+    expected_row_count: 3
+    rows:
+      - match: {category: "Furniture"}
+        values: {total_sales: {value: 3592.367, kind: currency}}
+      - match: {category: "Office Supplies"}
+        values: {total_sales: {value: 1055.386, kind: currency}}
+      - match: {category: "Technology"}
+        values: {total_sales: {value: 1179.14, kind: currency}}
+
+  - id: sales_by_region
+    query_id: sales_by_region
+    params: {}
+    computed_independently_via: "pandas: merged.groupby('region')['sales'].sum()"
+    result_shape: multi_row
+    row_key: region
+    expected_row_count: 4
+    rows:
+      - match: {region: "Central"}
+        values: {total_sales: {value: 432.21, kind: currency}}
+      - match: {region: "East"}
+        values: {total_sales: {value: 32.914, kind: currency}}
+      - match: {region: "South"}
+        values: {total_sales: {value: 4988.43, kind: currency}}
+      - match: {region: "West"}
+        values: {total_sales: {value: 373.339, kind: currency}}
+
+  - id: orders_by_ship_mode
+    query_id: orders_by_ship_mode
+    params: {}
+    computed_independently_via: "pandas: orders_df.drop_duplicates(subset='order_id')['ship_mode'].value_counts()"
+    result_shape: multi_row
+    row_key: ship_mode
+    expected_row_count: 3
+    rows:
+      - match: {ship_mode: "Standard Class"}
+        values: {order_count: {value: 9, kind: count}}
+      - match: {ship_mode: "Second Class"}
+        values: {order_count: {value: 2, kind: count}}
+      - match: {ship_mode: "First Class"}
+        values: {order_count: {value: 2, kind: count}}
+
+  - id: category_performance
+    query_id: category_performance
+    params: {}
+    computed_independently_via: "pandas: merged.groupby('category').agg(total_sales=('sales','sum'), total_profit=('profit','sum'), units_sold=('quantity','sum')); margin = total_profit/total_sales*100"
+    result_shape: multi_row
+    row_key: category
+    expected_row_count: 3
+    rows:
+      - match: {category: "Furniture"}
+        values:
+          total_sales: {value: 3592.367, kind: currency}
+          total_profit: {value: 808.3548, kind: currency}
+          profit_margin_pct: {value: 22.502011, kind: percent}
+          units_sold: {value: 24, kind: count}
+      - match: {category: "Office Supplies"}
+        values:
+          total_sales: {value: 1055.386, kind: currency}
+          total_profit: {value: 226.6259, kind: currency}
+          profit_margin_pct: {value: 21.473271, kind: percent}
+          units_sold: {value: 45, kind: count}
+      - match: {category: "Technology"}
+        values:
+          total_sales: {value: 1179.14, kind: currency}
+          total_profit: {value: 327.5334, kind: currency}
+          profit_margin_pct: {value: 27.777312, kind: percent}
+          units_sold: {value: 9, kind: count}
+
+  - id: category_performance_sorted_by_margin
+    query_id: category_performance
+    params: {sort_by: "margin"}
+    computed_independently_via: "pandas: same groupby as category_performance, sorted by profit_margin_pct descending"
+    result_shape: ordered_multi_row
+    order_key: category
+    expected_row_order: ["Technology", "Furniture", "Office Supplies"]
+
+  - id: region_profitability
+    query_id: region_profitability
+    params: {}
+    computed_independently_via: "pandas: merged.groupby('region')['profit'].sum(), sorted ascending"
+    result_shape: multi_row
+    row_key: region
+    expected_row_count: 4
+    rows:
+      - match: {region: "Central"}
+        values: {total_profit: {value: -121.483, kind: currency}}
+      - match: {region: "East"}
+        values: {total_profit: {value: 5.4442, kind: currency}}
+      - match: {region: "West"}
+        values: {total_profit: {value: 19.8276, kind: currency}}
+      - match: {region: "South"}
+        values: {total_profit: {value: 1458.7253, kind: currency}}
+
+  - id: top_customers_by_value_default
+    query_id: top_customers_by_value
+    params: {n: 5}
+    computed_independently_via: "pandas: merged.groupby('customer_id')['profit'].sum().sort_values(ascending=False).head(5)"
+    result_shape: ordered_multi_row
+    order_key: customer_id
+    expected_row_order: ["ME-17320", "ND-18370", "AJ-10780", "MS-17830", "BD-11605"]
+
+  - id: top_customers_by_value_sorted_by_sales
+    query_id: top_customers_by_value
+    params: {n: 3, sort_by: "sales"}
+    computed_independently_via: "pandas: merged.groupby('customer_id')['sales'].sum().sort_values(ascending=False).head(3)"
+    result_shape: ordered_multi_row
+    order_key: customer_id
+    expected_row_order: ["ME-17320", "ND-18370", "BD-11605"]
+
+  - id: subcategory_margin_ranked
+    query_id: subcategory_margin_ranked
+    params: {}
+    computed_independently_via: "pandas: merged.groupby('sub_category').agg(total_sales=('sales','sum'), total_profit=('profit','sum')); margin sorted ascending"
+    result_shape: ordered_multi_row
+    order_key: sub_category
+    expected_row_order: ["Storage", "Furnishings", "Fasteners", "Bookcases", "Chairs", "Phones", "Art", "Accessories", "Labels", "Binders", "Paper"]
+
+  - id: discount_level_margin_relationship
+    query_id: discount_level_margin_relationship
+    params: {}
+    computed_independently_via: "pandas: orders_df.groupby('discount').agg(n_line_items=('order_id','count'), total_sales=('sales','sum'), total_profit=('profit','sum'))"
+    result_shape: multi_row
+    row_key: discount
+    expected_row_count: 6
+    rows:
+      - match: {discount: 0.0}
+        values: {n_line_items: {value: 14, kind: count}}
+      - match: {discount: 0.15}
+        values: {n_line_items: {value: 1, kind: count}}
+      - match: {discount: 0.2}
+        values: {n_line_items: {value: 6, kind: count}}
+      - match: {discount: 0.6}
+        values: {n_line_items: {value: 1, kind: count}}
+      - match: {discount: 0.7}
+        values: {n_line_items: {value: 1, kind: count}}
+      - match: {discount: 0.8}
+        values: {n_line_items: {value: 2, kind: count}}

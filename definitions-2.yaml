@@ -1,0 +1,503 @@
+# =============================================================================
+# DEFINITIONS — Data Dictionary & Semantic Model for the Superstore Extract
+# (SS_Customers.xlsx, SS_Orders_Products.xlsx, SS_Products.xlsx)
+# =============================================================================
+# SSOT Documentation: this file is the single source of truth for what the
+# data means. Write/lock this BEFORE writing any SQL — queries.yaml is
+# written against the grain, keys, joins, and metric formulas defined here,
+# not the other way around. If a definition needs to change, change it here
+# first, then update queries.yaml to match.
+# =============================================================================
+
+version: 1
+generated_from:
+
+  - SS_Customers.xlsx        # sheet: Customers        (13 rows)
+  - SS_Orders_Products.xlsx  # sheets: Orders (25 rows), Products (25 rows)
+  - SS_Products.xlsx         # sheet: Products         (25 rows)
+
+#-----------------------------------------------------------------------------
+# TABLES
+#-----------------------------------------------------------------------------
+tables:
+
+  customers:
+    source: SS_Customers.xlsx!Customers
+    grain: "One row per customer."
+    row_count: 13
+    primary_key: [customer_id]
+    primary_key_verified: "customer_id is unique across all 13 rows (checked)."
+
+    columns:
+      - name: customer_id
+        source_header: "Customer ID"
+        type: varchar
+        description: "Natural key, format 'AA-NNNNN' (initials + numeric)."
+
+      - name: customer_name
+        source_header: "Customer Name"
+        type: varchar
+
+      - name: segment
+        source_header: "Segment"
+        type: varchar
+        domain: [Consumer, Corporate, Home Office]
+
+      - name: country_region
+        source_header: "Country/Region"
+        type: varchar
+        domain: [United States]
+        note: "Single-valued in this extract — not usable as a filter/grouping dimension."
+
+      - name: city
+        source_header: "City"
+        type: varchar
+
+      - name: state_province
+        source_header: "State/Province"
+        type: varchar
+
+      - name: postal_code
+        source_header: "Postal Code"
+        type: varchar
+        note: >
+          Load as VARCHAR, not INTEGER, even though every value in this extract
+          is numeric. US zip codes in New England states can have a leading
+          zero (e.g. 02134) which an INTEGER column would silently strip.
+          None of the 13 rows here happen to start with 0, but the schema
+          should not assume that stays true if more rows are appended.
+
+      - name: region
+        source_header: "Region"
+        type: varchar
+        domain: [South, West, Central, East]
+        note: "Sales region grouping of state_province; not the same field as country_region."
+
+  products:
+    source: SS_Products.xlsx!Products
+    grain: "One row per product (SKU)."
+    row_count: 25
+    primary_key: [product_id]
+    primary_key_verified: "product_id is unique across all 25 rows (checked)."
+
+    columns:
+      - name: product_id
+        source_header: "Product ID"
+        type: varchar
+        description: "Format 'CAT-SUB-NNNNNNNN', e.g. FUR-CH-10004063."
+
+      - name: category
+        source_header: "Category"
+        type: varchar
+        domain: [Furniture, Office Supplies, Technology]
+
+      - name: sub_category
+        source_header: "Sub-Category"
+        type: varchar
+        domain: [Bookcases, Chairs, Furnishings, Art, Binders, Fasteners, Labels, Paper, Storage, Accessories, Phones]
+        note: "sub_category rolls up to exactly one category (verified)."
+
+      - name: product_name
+        source_header: "Product Name"
+        type: varchar
+
+  orders:
+    source: SS_Orders_Products.xlsx!Orders
+    grain: >
+      One row per (order, product) line item — i.e. per distinct product
+      shipped within an order. THIS IS NOT ORDER GRAIN. An order with N
+      distinct products produces N rows here, all sharing the same order_id.
+    row_count: 25
+    distinct_order_id_count: 13
+    primary_key: [row_id]
+    natural_key: [order_id, product_id]
+    natural_key_verified: "No duplicate (order_id, product_id) pairs found across all 25 rows."
+
+    foreign_keys:
+      - column: customer_id
+        references: customers.customer_id
+        integrity: "Verified — every customer_id in orders exists in customers, no orphans."
+      - column: product_id
+        references: products.product_id
+        integrity: "Verified — every product_id in orders exists in products, no orphans."
+
+    columns:
+      - name: row_id
+        source_header: "Row ID"
+        type: integer
+        description: "Surrogate key for the line item. Unique, no business meaning."
+
+      - name: order_id
+        source_header: "Order ID"
+        type: varchar
+        description: "Format 'US-YYYY-NNNNNN'. Repeats across rows that belong to the same order."
+
+      - name: order_date
+        source_header: "Order Date"
+        type: date
+        note: >
+          DENORMALIZED ONTO LINE-ITEM GRAIN: verified that every line item
+          sharing an order_id has the identical order_date (unique per
+          order_id = 1 for all 13 orders). Do not average or otherwise
+          aggregate this column at line-item grain — dedupe to order grain
+          first (see "orders_deduped_to_header" note under Joins).
+
+      - name: ship_date
+        source_header: "Ship Date"
+        type: date
+        note: "Same denormalization caveat as order_date — identical for all lines of an order (verified)."
+
+      - name: ship_mode
+        source_header: "Ship Mode"
+        type: varchar
+        domain: [Standard Class, First Class, Second Class]
+        note: "Same denormalization caveat as order_date — identical for all lines of an order (verified)."
+
+      - name: customer_id
+        source_header: "Customer ID"
+        type: varchar
+        note: "Same denormalization caveat — one customer per order (verified)."
+
+      - name: product_id
+        source_header: "Product ID"
+        type: varchar
+
+      - name: sales
+        source_header: "Sales"
+        type: decimal(12,4)
+        description: >
+          Line-item revenue. Believed to be NET of the discount already
+          (i.e. sales = list_price * quantity * (1 - discount)), consistent
+          with the standard "Superstore" sample dataset this extract derives
+          from. UNVERIFIED: no list-price/unit-price column exists in the
+          source to confirm this arithmetically. Do not present a "gross
+          sales before discount" figure without flagging it as a derived,
+          unconfirmed estimate (gross ≈ sales / (1 - discount), undefined
+          when discount = 1).
+
+      - name: quantity
+        source_header: "Quantity"
+        type: integer
+        range_observed: [1, 9]
+
+      - name: discount
+        source_header: "Discount"
+        type: decimal(4,2)
+        range_observed: [0.0, 0.8]
+        description: "Fraction, e.g. 0.20 = 20% off. Not a percentage 0-100."
+
+      - name: profit
+        source_header: "Profit"
+        type: decimal(12,4)
+        note: >
+          Can be negative (5 of 25 lines are loss-making, i.e. discount ate
+          past cost). This is expected business behavior in this dataset,
+          not a data error — do not flag negative profit rows as anomalies
+          without separately checking discount level on that row.
+
+# -----------------------------------------------------------------------------
+# JOINS
+# -----------------------------------------------------------------------------
+joins:
+  permitted:
+    - name: orders_to_customers
+      sql: "orders JOIN customers ON orders.customer_id = customers.customer_id"
+      cardinality: "many-to-one (many order lines -> one customer)"
+      integrity: "No orphans in either direction and every customer_id resolves."
+
+    - name: orders_to_products
+      sql: "orders JOIN products ON orders.product_id = products.product_id"
+      cardinality: "many-to-one (many order lines -> one product)"
+      integrity: "Every product_id resolves; safe to inner join."
+
+    - name: orders_to_customers_and_products
+      sql: >
+        orders
+        JOIN customers ON orders.customer_id = customers.customer_id
+        JOIN products  ON orders.product_id  = products.product_id
+      cardinality: "orders stays at its own (order_id, product_id) grain; both joins are many-to-one from orders' perspective."
+      note: "Safe to chain both joins in the same query — neither introduces fan-out because both are many-to-one relative to orders."
+
+  forbidden:
+    - name: customers_to_products
+      reason: >
+        No direct relationship exists between customers and products; the
+        only path between them is through orders. Joining them directly
+        (e.g. via a shared literal or cross join) fabricates a relationship
+        that isn't in the data and will silently produce a cartesian
+        product (13 x 25 = 325 rows) with no business meaning.
+
+    - name: order_level_metrics_without_dedup
+      reason: >
+        Because order_date, ship_date, ship_mode, and customer_id are
+        denormalized onto every line item of an order (see orders table
+        notes), computing an order-level metric (count of orders, average
+        ship time, orders by ship mode, etc.) directly against the raw
+        orders table over-weights orders with more line items. Example: an
+        order with 7 line items (US-2021-167199) would be counted 7 times
+        in a naive COUNT(*), and its ship_mode would be counted 7 times in
+        a naive GROUP BY ship_mode.
+      required_pattern: >
+        Always deduplicate to order grain first:
+          orders_deduped_to_header AS (
+            SELECT DISTINCT order_id, order_date, ship_date, ship_mode, customer_id
+            FROM orders
+          )
+        then aggregate from that CTE, never from raw orders, for anything
+        that isn't inherently a line-item measure (sales, profit, quantity,
+        discount are fine to sum directly from orders).
+
+# -----------------------------------------------------------------------------
+# METRICS
+# -----------------------------------------------------------------------------
+# Every metric below is the exact, only-correct SQL fragment. "synonyms" are
+# business terms people use that should resolve to this same definition.
+# queries.yaml's SQL must trace back to one of these formulas — it does not
+# invent new aggregation logic of its own.
+# -----------------------------------------------------------------------------
+metrics:
+
+  - name: total_sales
+    synonyms: [revenue, gross sales, top line, sales total]
+    grain: "any (fully additive across all dimensions)"
+    sql: "SUM(orders.sales)"
+    caveat: "This is net-of-discount revenue per the sales column note above, not list-price revenue."
+
+  - name: total_profit
+    synonyms: [net profit, earnings, bottom line]
+    grain: "any (fully additive)"
+    sql: "SUM(orders.profit)"
+
+  - name: profit_margin_pct
+    synonyms: [margin, profit margin, margin percent]
+    sql: "SUM(orders.profit) / NULLIF(SUM(orders.sales), 0) * 100"
+    caveat: "Guard the denominator with NULLIF — a sales-free slice (shouldn't occur here, but could in a filtered subquery) would otherwise divide by zero."
+
+  - name: order_count
+    synonyms: [number of orders, orders placed, order volume]
+    sql: "COUNT(DISTINCT orders.order_id)"
+    caveat: "MUST use COUNT(DISTINCT order_id), never COUNT(*) — orders table is at line-item grain (see orders_to_customers_and_products / order_level_metrics_without_dedup notes)."
+
+  - name: line_item_count
+    synonyms: [order lines, SKU lines, number of line items]
+    sql: "COUNT(*)  -- from orders"
+    caveat: "This counts (order, product) pairs, not orders. Do not confuse with order_count."
+
+  - name: units_sold
+    synonyms: [quantity sold, items sold, volume]
+    sql: "SUM(orders.quantity)"
+
+  - name: average_order_value
+    synonyms: [AOV, average order size]
+    sql: "SUM(orders.sales) / COUNT(DISTINCT orders.order_id)"
+    caveat: "Denominator is distinct orders, not line items."
+
+  - name: average_line_item_value
+    synonyms: [average line size]
+    sql: "SUM(orders.sales) / COUNT(*)  -- from orders"
+    caveat: "Different from average_order_value — do not use these interchangeably; this one is per line item, not per order."
+
+  - name: average_discount_rate
+    synonyms: [avg discount, typical discount]
+    sql: "AVG(orders.discount)"
+    caveat: >
+      Simple (unweighted) average across line items — a $5 line and a $2,500
+      line count equally. If asked for a "sales-weighted" discount instead,
+      that is a different metric: SUM(orders.sales * orders.discount) /
+      SUM(orders.sales) is only a rough proxy since sales is already net of
+      discount (see sales column note) — flag this weighting as approximate
+      if used.
+
+  - name: customer_count
+    synonyms: [total customers, customer base size]
+    sql: "COUNT(DISTINCT customers.customer_id)  -- from customers"
+    caveat: "All 13 customers in this extract have at least one order (verified), so this equals active_customer_count here — that will not necessarily hold if the customer dimension grows independently of orders."
+
+  - name: active_customer_count
+    synonyms: [customers with orders, purchasing customers]
+    sql: "COUNT(DISTINCT orders.customer_id)  -- from orders"
+
+  - name: average_days_to_ship
+    synonyms: [fulfillment time, shipping lead time]
+    sql: >
+      WITH orders_deduped_to_header AS (
+        SELECT DISTINCT order_id, order_date, ship_date FROM orders
+      )
+      SELECT AVG(DATE_DIFF('day', order_date, ship_date)) FROM orders_deduped_to_header
+    caveat: "MUST use the deduplicated CTE — see order_level_metrics_without_dedup. Observed range in this extract: 1-7 days, mean ~4.1 days, across only 9 distinct order dates."
+
+  - name: sales_by_category
+    synonyms: [revenue by category, category sales]
+    sql: >
+      SELECT products.category, SUM(orders.sales) AS total_sales
+      FROM orders JOIN products ON orders.product_id = products.product_id
+      GROUP BY products.category
+
+  - name: sales_by_region
+    synonyms: [revenue by region, regional sales]
+    sql: >
+      SELECT customers.region, SUM(orders.sales) AS total_sales
+      FROM orders JOIN customers ON orders.customer_id = customers.customer_id
+      GROUP BY customers.region
+
+  - name: orders_by_ship_mode
+    synonyms: [shipping method mix, ship mode distribution]
+    sql: >
+      WITH orders_deduped_to_header AS (
+        SELECT DISTINCT order_id, ship_mode FROM orders
+      )
+      SELECT ship_mode, COUNT(*) AS order_count
+      FROM orders_deduped_to_header
+      GROUP BY ship_mode
+    caveat: "Uses the deduped CTE — same reasoning as average_days_to_ship."
+
+  - name: category_performance
+    synonyms: [category profitability, how categories are doing]
+    sql: >
+      SELECT products.category,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit,
+             SUM(orders.profit) / NULLIF(SUM(orders.sales), 0) * 100 AS profit_margin_pct,
+             SUM(orders.quantity) AS units_sold
+      FROM orders JOIN products ON orders.product_id = products.product_id
+      GROUP BY products.category
+    caveat: "Use this, not sales_by_category, whenever 'performance' implies profitability rather than revenue alone."
+
+  - name: region_profitability
+    synonyms: [profit by region, which region loses money]
+    sql: >
+      SELECT customers.region,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit
+      FROM orders JOIN customers ON orders.customer_id = customers.customer_id
+      GROUP BY customers.region
+    caveat: "Use this, not sales_by_region, whenever profit (not revenue) is the actual question. Verified: Central is the only region with negative total profit in the full extract; South's profit is 92% concentrated in a single customer's single order."
+
+  - name: top_customers_by_value
+    synonyms: [best customers, top customers by profit or sales]
+    sql: >
+      SELECT customers.customer_id, customers.customer_name,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit
+      FROM orders JOIN customers ON orders.customer_id = customers.customer_id
+      GROUP BY customers.customer_id, customers.customer_name
+    caveat: >
+      Ranks single-order value, not loyalty — every customer in this extract
+      has exactly one order (verified). "Best" is ambiguous between sales
+      and profit; default sort is profit, and a caller must state which was
+      used since the two rankings diverge past #1.
+
+  - name: subcategory_margin_ranked
+    synonyms: [sub-category margin, worst margin sub-categories]
+    sql: >
+      SELECT products.category, products.sub_category,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit,
+             SUM(orders.profit) / NULLIF(SUM(orders.sales), 0) * 100 AS profit_margin_pct
+      FROM orders JOIN products ON orders.product_id = products.product_id
+      GROUP BY products.category, products.sub_category
+    caveat: "4 of 11 sub-categories (Accessories, Bookcases, Fasteners, Storage) have exactly 1 line item — their margin is a single transaction's result, not a stable average. Always report line-item count alongside this metric."
+
+  - name: discount_level_margin_relationship
+    synonyms: [margin by discount level, discount vs. profit]
+    sql: >
+      SELECT discount,
+             COUNT(*) AS n_line_items,
+             SUM(sales) AS total_sales,
+             SUM(profit) AS total_profit,
+             SUM(profit) / NULLIF(SUM(sales), 0) * 100 AS profit_margin_pct
+      FROM orders
+      GROUP BY discount
+    caveat: >
+      Descriptive only — a lookup of what has historically happened at each
+      observed discount level. Never use to project or interpolate the
+      outcome of a discount level with zero historical rows (e.g. 25%,
+      when observed values jump from 20% to 60% with nothing between).
+
+# -----------------------------------------------------------------------------
+# DATA QUALITY CAVEATS — read before trusting any result computed above
+# -----------------------------------------------------------------------------
+data_quality_notes:
+
+  - id: duplicate_products_source
+    severity: medium
+    description: >
+      The "Products" sheet appears twice, byte-for-byte identical, in both
+      SS_Orders_Products.xlsx and SS_Products.xlsx (verified via full
+      DataFrame equality check across all 25 rows / 4 columns). Load
+      products from exactly one of these sources — recommended: SS_Products.xlsx,
+      since its filename makes it the unambiguous source of truth — and
+      never both, or you will double-count/duplicate-key on load.
+
+  - id: tiny_sample_size
+    severity: high
+    description: >
+      This extract covers only 13 customers, 25 order lines across 13
+      distinct orders, and 9 distinct calendar days (Jan 3-13, 2021). This
+      is almost certainly a small teaching/demo slice of the much larger
+      public "Superstore" sample dataset, not a representative or complete
+      transactional history. Any trend, seasonality, or statistical claim
+      ("Q1 is our slowest quarter", "discounts are increasing") is not
+      supportable from this data and should be refused or heavily caveated
+      if requested.
+
+  - id: denormalized_order_header_fields
+    severity: high
+    description: >
+      order_date, ship_date, ship_mode, and customer_id live on the
+      orders table at line-item grain but are constant within each
+      order_id (verified: max distinct value per order_id = 1 for each of
+      these four columns, across all 13 orders). Any order-level aggregate
+      must dedupe first — see the order_level_metrics_without_dedup join
+      rule and the average_days_to_ship / orders_by_ship_mode metrics for
+      the required pattern.
+
+  - id: anomalous_customer_name
+    severity: low
+    description: >
+      Customer VS-21820 is named "Vivek Sundaresam ji1" — the trailing
+      "ji1" looks like leftover test/placeholder text rather than a real
+      name. Flag this to a human before it appears in a customer-facing
+      report; do not silently "clean" it (e.g. strip to "Vivek Sundaresam")
+      without confirmation, since that's a guess at intent.
+
+  - id: sales_column_is_net_not_gross
+    severity: medium
+    description: >
+      There is no unit-price / list-price column anywhere in the source
+      files. The sales column is assumed net-of-discount based on how the
+      public Superstore dataset is normally structured, but this could not
+      be verified arithmetically here (no independent price field to check
+      against). Any request for "gross sales before discount" or "discount
+      amount in dollars" requires deriving from sales and discount
+      (gross ≈ sales / (1 - discount)) and must be labeled as a derived,
+      unverified estimate, not a sourced figure.
+
+  - id: postal_code_typing
+    severity: low
+    description: >
+      All 13 postal codes in this extract are 5-digit numbers with no
+      leading zero, so loading postal_code as INTEGER would not currently
+      lose data — but it is schema'd as VARCHAR here (see customers table)
+      to avoid silently truncating a future New England zip code (e.g.
+      02134) that starts with 0.
+
+  - id: single_valued_columns
+    severity: low
+    description: >
+      country_region on customers is "United States" for all 13 rows.
+      It is a valid column but has zero discriminating power in this
+      extract — do not use it as a GROUP BY or filter dimension and expect
+      more than one bucket back.
+
+  - id: mechanical_load_vs_typed_load
+    severity: low
+    description: >
+      load_data.py (step 1) loads columns with whatever type pandas/DuckDB
+      infers (e.g. postal_code as an integer, dates as timestamps) — it
+      makes no typing decisions on purpose. The VARCHAR/DECIMAL/DATE types
+      declared in this file are the deliberate, correct types queries.yaml
+      and run_query.py should be written against; they are not necessarily
+      what a fresh run of load_data.py produces without a follow-up typing
+      step. Do not assume load_data.py's raw output already matches this
+      schema exactly.

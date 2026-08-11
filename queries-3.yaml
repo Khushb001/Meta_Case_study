@@ -1,0 +1,418 @@
+# =============================================================================
+# APPROVED QUERY LIBRARY — Superstore Extract
+# =============================================================================
+# Written AGAINST definitions.yaml (step 2) — every "sql" field below traces
+# back to a metric formula already locked down there. This file does not
+# invent new aggregation logic on the fly; if a question needs a formula
+# that isn't in definitions.yaml's metrics section, the fix is to add it
+# there first, then add the corresponding query here — not to freehand new
+# SQL in this file.
+#
+# Every entry here is a pre-vetted SQL answer to a specific business
+# question. An assistant selecting a query should match the caller's
+# question against "phrasings", use the "sql" verbatim (only varying what
+# "parameters.allowed" permits), and must surface every string under
+# "notes" alongside the result.
+#
+# If a question doesn't match any entry here AND isn't listed under
+# "unanswerable", do not improvise new SQL against the raw tables silently —
+# say the question isn't in the approved library and, if attempting an
+# ad-hoc answer, flag it as unvetted.
+# =============================================================================
+
+version: 1
+depends_on: definitions.yaml
+
+queries:
+
+  - id: total_sales
+    question: "What are total sales?"
+    phrasings:
+      - "total sales"
+      - "revenue"
+      - "how much did we sell"
+      - "gross sales" # note: name is inherited from definitions.yaml; actual figure is net-of-discount, see notes
+      - "sales total"
+      - "top line"
+    sql: "SELECT SUM(sales) AS total_sales FROM orders"
+    result_grain: "Single scalar. Fully additive — any WHERE/JOIN filter narrows the population without changing correctness."
+    parameters:
+      allowed:
+        - "Add WHERE order_date BETWEEN :start AND :end to scope to a date range."
+        - "Add JOIN products and WHERE products.category = :category to scope to a category."
+        - "Add JOIN customers and WHERE customers.region = :region (or .segment = :segment) to scope to a region/segment."
+      not_allowed:
+        - "Do not swap SUM for AVG and still call the result 'total_sales' — that is average_line_item_value or average_order_value, a different metric."
+        - "Do not GROUP BY anything and present it as 'total sales' — a grouped result is sales_by_category / sales_by_region, not this."
+    notes:
+      - "This figure is net of discount already (sales column bakes in the discount), not list-price revenue. See sales_column_is_net_not_gross in definitions.yaml."
+
+  - id: total_profit
+    question: "What is total profit?"
+    phrasings: ["total profit", "net profit", "earnings", "bottom line", "how much did we make"]
+    sql: "SELECT SUM(profit) AS total_profit FROM orders"
+    result_grain: "Single scalar, fully additive."
+    parameters:
+      allowed:
+        - "Same filter/join patterns as total_sales (date range, category, region/segment)."
+      not_allowed:
+        - "Do not confuse with total_sales — profit is revenue minus cost, already net of any discount effect on cost recovery."
+    notes:
+      - "Can legitimately be negative for a filtered slice (5 of 25 line items in the full extract are individually loss-making) — a negative result is not itself evidence of a data error."
+
+  - id: profit_margin_pct
+    question: "What is our profit margin?"
+    phrasings: ["profit margin", "margin", "margin percent", "profitability"]
+    sql: "SELECT SUM(profit) / NULLIF(SUM(sales), 0) * 100 AS profit_margin_pct FROM orders"
+    result_grain: "Single scalar percentage."
+    parameters:
+      allowed:
+        - "Same filter/join patterns as total_sales."
+      not_allowed:
+        - "Do not compute margin as AVG(profit/sales) row-by-row-then-averaged — that weights every line item equally regardless of size and will not match SUM(profit)/SUM(sales). Only the ratio-of-sums version is approved."
+        - "Do not drop the NULLIF guard — a filtered slice with zero sales must return NULL, not error or a fabricated number."
+    notes:
+      - "Ratio-of-sums margin, not average-of-ratios margin. These give different numbers and only the former is approved for reporting."
+
+  - id: order_count
+    question: "How many orders were placed?"
+    phrasings: ["number of orders", "order count", "orders placed", "order volume", "how many orders"]
+    sql: "SELECT COUNT(DISTINCT order_id) AS order_count FROM orders"
+    result_grain: "Single scalar, counting distinct orders (not line items)."
+    parameters:
+      allowed:
+        - "Add WHERE order_date BETWEEN :start AND :end."
+        - "Add JOIN customers and filter by region/segment to count orders from that slice."
+      not_allowed:
+        - "Never use COUNT(*) in place of COUNT(DISTINCT order_id) — orders is at line-item grain (25 rows = 13 orders); COUNT(*) overstates by however many multi-line orders fall in scope."
+        - "Do not add a JOIN to products and then COUNT(DISTINCT order_id) without realizing the join doesn't change the count itself, only what you're allowed to filter on — this is safe, just don't mistake it for a different metric."
+    notes:
+      - "13 orders total in the full extract, spread across only 9 distinct calendar days — too small a sample to speak to order-volume trend."
+
+  - id: line_item_count
+    question: "How many order lines / SKU lines are there?"
+    phrasings: ["number of line items", "order lines", "SKU lines", "how many products were ordered in total (line count sense)"]
+    sql: "SELECT COUNT(*) AS line_item_count FROM orders"
+    result_grain: "Single scalar, counts (order_id, product_id) pairs."
+    parameters:
+      allowed:
+        - "Same WHERE/JOIN filters as order_count."
+      not_allowed:
+        - "Do not present this number as 'number of orders' — it is 25 in the full extract vs. 13 orders. These are different questions with different correct answers."
+
+  - id: units_sold
+    question: "How many units/items were sold?"
+    phrasings: ["units sold", "items sold", "quantity sold", "volume sold"]
+    sql: "SELECT SUM(quantity) AS units_sold FROM orders"
+    result_grain: "Single scalar, fully additive."
+    parameters:
+      allowed:
+        - "Same filter/join patterns as total_sales."
+      not_allowed:
+        - "Do not confuse with line_item_count or order_count — this sums the quantity column, not row counts."
+
+  - id: average_order_value
+    question: "What is the average order value?"
+    phrasings: ["AOV", "average order value", "average order size", "typical order size"]
+    sql: "SELECT SUM(sales) / COUNT(DISTINCT order_id) AS average_order_value FROM orders"
+    result_grain: "Single scalar, dollars per order."
+    parameters:
+      allowed:
+        - "Same filter/join patterns as total_sales; both numerator and denominator scope to the same filtered rows automatically."
+      not_allowed:
+        - "Do not divide by COUNT(*) instead of COUNT(DISTINCT order_id) — that produces average_line_item_value, a different metric."
+    notes:
+      - "Denominator is 13 distinct orders in the full extract, not 25 line items."
+
+  - id: average_line_item_value
+    question: "What is the average value of a single order line / SKU purchased?"
+    phrasings: ["average line item value", "average line size", "average per-SKU value"]
+    sql: "SELECT SUM(sales) / COUNT(*) AS average_line_item_value FROM orders"
+    result_grain: "Single scalar, dollars per line item."
+    parameters:
+      allowed:
+        - "Same filter/join patterns as total_sales."
+      not_allowed:
+        - "Do not present interchangeably with average_order_value — they answer different questions and use different denominators."
+
+  - id: average_discount_rate
+    question: "What is the average discount we give?"
+    phrasings: ["average discount", "typical discount", "avg discount rate"]
+    sql: "SELECT AVG(discount) AS average_discount_rate FROM orders"
+    result_grain: "Single scalar, unweighted mean of the discount column across line items."
+    parameters:
+      allowed:
+        - "Same filter/join patterns as total_sales."
+      not_allowed:
+        - "Do not silently switch to a sales-weighted version (SUM(sales*discount)/SUM(sales)) and still call it 'average discount rate' — that is a distinct, approximate metric (see notes) and must be labeled as such if used."
+    notes:
+      - "Unweighted: a $5 line and a $2,500 line count equally. If a sales-weighted discount is specifically requested, it must be presented as an approximation, since sales is already net of discount, not a clean weight."
+
+  - id: customer_count
+    question: "How many customers do we have?"
+    phrasings: ["total customers", "customer count", "customer base size", "how many customers"]
+    sql: "SELECT COUNT(DISTINCT customer_id) AS customer_count FROM customers"
+    result_grain: "Single scalar, from the customers dimension table (not orders)."
+    parameters:
+      allowed:
+        - "No filters currently definable — the customers table carries no date or transactional column to scope by. Filtering by segment/region is possible: WHERE segment = :segment or WHERE region = :region."
+      not_allowed:
+        - "Do not run this against orders (COUNT(DISTINCT customer_id) FROM orders) and call it customer_count — that is active_customer_count, a related but distinct metric that happens to equal this one only because every customer in this extract has at least one order."
+
+  - id: active_customer_count
+    question: "How many customers actually placed an order?"
+    phrasings: ["active customers", "purchasing customers", "customers with orders"]
+    sql: "SELECT COUNT(DISTINCT customer_id) AS active_customer_count FROM orders"
+    result_grain: "Single scalar, from orders."
+    parameters:
+      allowed:
+        - "Add WHERE order_date BETWEEN :start AND :end to scope to customers active in a window."
+      not_allowed:
+        - "Do not assume this always equals customer_count — it only does here because every one of the 13 customers has exactly one order in this extract."
+
+  - id: average_days_to_ship
+    question: "How long does it take to ship an order?"
+    phrasings: ["average shipping time", "fulfillment time", "shipping lead time", "days to ship"]
+    sql: >
+      WITH orders_deduped_to_header AS (
+        SELECT DISTINCT order_id, order_date, ship_date FROM orders
+      )
+      SELECT AVG(DATE_DIFF('day', order_date, ship_date)) AS average_days_to_ship
+      FROM orders_deduped_to_header
+    result_grain: "Single scalar, days, computed at ORDER grain (post-dedup), not line-item grain."
+    parameters:
+      allowed:
+        - "Add a WHERE clause inside the CTE to scope by order_date range."
+        - "Add ship_mode to the CTE's SELECT DISTINCT and GROUP BY it to break the average out per shipping method (this is the orders_by_ship_mode pattern combined with a days calc)."
+      not_allowed:
+        - "Never compute this directly off raw orders without the dedup CTE — multi-line orders would be counted once per line item and skew the average toward their own ship time (verified: naive = 4.12 days vs. correct = 4.00 days on the full extract)."
+    notes:
+      - "Full-extract range: 1-7 days, mean 4.0 days, across only 9 distinct order dates — too thin a sample to claim a seasonal or trending fulfillment-time pattern."
+
+  - id: sales_by_category
+    question: "How do sales break down by product category?"
+    phrasings: ["revenue by category", "category sales", "sales by category"]
+    sql: >
+      SELECT products.category, SUM(orders.sales) AS total_sales
+      FROM orders JOIN products ON orders.product_id = products.product_id
+      GROUP BY products.category
+    result_grain: "One row per category (3 categories: Furniture, Office Supplies, Technology)."
+    parameters:
+      allowed:
+        - "Add WHERE orders.order_date BETWEEN :start AND :end."
+        - "Swap GROUP BY products.category for GROUP BY products.sub_category for a finer cut (11 sub-categories)."
+      not_allowed:
+        - "Do not join customers into this query and also GROUP BY a customer attribute in the same result set without checking cardinality first — orders JOIN products JOIN customers is safe (both many-to-one from orders), but grouping by two independent dimensions at once (category AND region) is a different, valid metric, not this one — don't silently relabel it as 'sales by category'."
+
+  - id: sales_by_region
+    question: "How do sales break down by region?"
+    phrasings: ["revenue by region", "regional sales", "sales by region"]
+    sql: >
+      SELECT customers.region, SUM(orders.sales) AS total_sales
+      FROM orders JOIN customers ON orders.customer_id = customers.customer_id
+      GROUP BY customers.region
+    result_grain: "One row per region (4 regions: South, West, Central, East)."
+    parameters:
+      allowed:
+        - "Add WHERE orders.order_date BETWEEN :start AND :end."
+        - "Swap GROUP BY customers.region for GROUP BY customers.segment or customers.state_province for a different cut."
+      not_allowed:
+        - "Do not GROUP BY customers.country_region — every row is 'United States' in this extract, the grouping is a no-op (see single_valued_columns in definitions.yaml)."
+
+  - id: orders_by_ship_mode
+    question: "How do orders split across shipping methods?"
+    phrasings: ["shipping method mix", "ship mode distribution", "orders by ship mode"]
+    sql: >
+      WITH orders_deduped_to_header AS (
+        SELECT DISTINCT order_id, ship_mode FROM orders
+      )
+      SELECT ship_mode, COUNT(*) AS order_count
+      FROM orders_deduped_to_header
+      GROUP BY ship_mode
+      ORDER BY order_count DESC
+    result_grain: "One row per ship_mode (3 values), counting distinct orders."
+    parameters:
+      allowed:
+        - "Add order_date to the CTE's SELECT DISTINCT and a WHERE clause to scope by date range."
+      not_allowed:
+        - "Never GROUP BY ship_mode directly on raw orders (no dedup) — verified this overstates Standard Class specifically (naive: 21 vs. correct: 9 in the full extract) because it happens to contain the one 7-line order."
+
+  - id: category_performance
+    question: "How did the different product categories perform?"
+    phrasings: ["category performance", "how are categories doing", "performance by category"]
+    sql: >
+      SELECT products.category,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit,
+             SUM(orders.profit) / NULLIF(SUM(orders.sales), 0) * 100 AS profit_margin_pct,
+             SUM(orders.quantity) AS units_sold
+      FROM orders JOIN products ON orders.product_id = products.product_id
+      GROUP BY products.category
+      ORDER BY total_sales DESC
+    result_grain: "One row per category (3 categories)."
+    parameters:
+      allowed:
+        - "Add WHERE orders.order_date BETWEEN :start AND :end."
+        - "Swap ORDER BY total_sales DESC for ORDER BY total_profit DESC or ORDER BY profit_margin_pct ASC/DESC — sort order is not load-bearing on correctness."
+      not_allowed:
+        - "Do not answer 'performance' with sales_by_category alone — 'performance' implies profitability, not just revenue. This query is the correct one for this phrasing; sales_by_category is only correct when someone explicitly asks for revenue/sales specifically."
+    notes:
+      - "Verified on the full extract: Technology has the best margin (~27.8%) despite the smallest volume (9 units); Furniture (~22.5%) and Office Supplies (~21.5%) are close to each other. All three categories are profitable overall — none is a loser at the category level."
+      - "Only 25 line items total across 3 categories — treat these margin percentages as descriptive of this extract, not a stable long-run category economics claim."
+
+  - id: region_profitability
+    question: "Which region is losing us money?"
+    phrasings: ["which region is unprofitable", "region losing money", "region profitability", "profit by region"]
+    sql: >
+      SELECT customers.region,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit
+      FROM orders JOIN customers ON orders.customer_id = customers.customer_id
+      GROUP BY customers.region
+      ORDER BY total_profit ASC
+    result_grain: "One row per region (4 regions), ordered worst-profit-first."
+    parameters:
+      allowed:
+        - "Add WHERE orders.order_date BETWEEN :start AND :end."
+      not_allowed:
+        - "Do not answer this using sales_by_region — that query only sums sales, and a region can have high sales and still be losing money (or vice versa). 'Losing money' means profit, not revenue; use this query, not sales_by_region, whenever profit is the actual question."
+        - "Do not report the losing region without the concentration caveat below — a single order/customer can dominate a region's total in a sample this small, and the number is not evidence of a durable regional trend."
+    notes:
+      - "Verified on the full extract: Central is the only region with negative total profit (-$121.48), driven mainly by two loss-making line items (a Storage line at -$64.77 and a Furnishings line at -$29.33), both carrying discounts >=20%. South looks most profitable (+$1,459), but 92% of that ($1,343) comes from a single customer's single order (Maria Etezadi, ME-17320) — South is not broadly profitable, one order is."
+      - "Each region has only 2-4 orders in this extract (13 orders across 4 regions) — this is a directional read on this specific sample, not a statistically reliable regional performance signal."
+
+  - id: top_customers_by_value
+    question: "Who are our best customers?"
+    phrasings: ["best customers", "top customers", "highest value customers", "who buys the most"]
+    sql: >
+      SELECT customers.customer_id, customers.customer_name,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit
+      FROM orders JOIN customers ON orders.customer_id = customers.customer_id
+      GROUP BY customers.customer_id, customers.customer_name
+      ORDER BY total_profit DESC
+      LIMIT :n
+    result_grain: "One row per customer, ranked by profit (default), limited to top :n."
+    parameters:
+      allowed:
+        - ":n (how many customers to return) may be varied."
+        - "ORDER BY total_profit DESC may be swapped for ORDER BY total_sales DESC if the caller explicitly wants 'highest revenue customers' rather than 'best' — but the two produce different rankings past #1 and must be labeled accordingly (e.g. 'top by revenue' vs. 'top by profit')."
+      not_allowed:
+        - "Do not present a ranking without stating which metric (sales or profit) it's sorted by — 'best' is ambiguous, and a customer can rank high on sales while being unprofitable (verified: PO-19195 and VS-21820 are both top-5 by sales but have negative total profit)."
+        - "Do not describe this as loyalty, retention, or repeat-purchase value — every customer in this extract has exactly one order (verified), so this ranks single-order value only, not customer relationship value over time."
+    notes:
+      - "Verified on the full extract: Maria Etezadi (ME-17320) is #1 by both sales ($4,375) and profit ($1,343) — over 3x the next customer either way, so the #1 answer is unambiguous. Rankings for #2 onward differ depending on whether sales or profit is used."
+
+  - id: subcategory_margin_ranked
+    question: "Break the category numbers down one level further, worst margin first."
+    phrasings: ["sub-category margin", "worst margin sub-categories", "sub-category performance ranked by margin"]
+    sql: >
+      SELECT products.category, products.sub_category,
+             SUM(orders.sales) AS total_sales,
+             SUM(orders.profit) AS total_profit,
+             SUM(orders.profit) / NULLIF(SUM(orders.sales), 0) * 100 AS profit_margin_pct
+      FROM orders JOIN products ON orders.product_id = products.product_id
+      GROUP BY products.category, products.sub_category
+      ORDER BY profit_margin_pct ASC
+    result_grain: "One row per sub-category (11 sub-categories), ordered worst-margin-first."
+    parameters:
+      allowed:
+        - "Add WHERE orders.order_date BETWEEN :start AND :end."
+        - "Filter to a single products.category first if the caller wants sub-categories within one category only."
+      not_allowed:
+        - "Do not report a sub-category's margin without checking its line-item count first (see notes) — several sub-categories here are backed by a single line item, and presenting that as a stable sub-category-level economics figure overstates confidence the sample doesn't support."
+    notes:
+      - "Verified on the full extract: worst margins are Office Supplies/Storage (-23.75%, n=1 line item) and Furniture/Furnishings (-21.16%, n=3 line items); best are Paper (42.17%, n=3) and Binders (39.57%, n=4). Four of eleven sub-categories (Accessories, Bookcases, Fasteners, Storage) have exactly 1 line item each — their margin is that single transaction's result, not an average."
+
+  - id: discount_level_margin_relationship
+    question: "We're thinking about a blanket 25% discount promotion. What does the data say?"
+    phrasings: ["25% discount promotion", "blanket discount", "discount promo impact"]
+    sql: >
+      SELECT discount,
+             COUNT(*) AS n_line_items,
+             SUM(sales) AS total_sales,
+             SUM(profit) AS total_profit,
+             SUM(profit) / NULLIF(SUM(sales), 0) * 100 AS profit_margin_pct
+      FROM orders
+      GROUP BY discount
+      ORDER BY discount ASC
+    result_grain: "One row per historically observed discount level (6 distinct values in this extract) — this is a descriptive lookup, NOT a projection."
+    parameters:
+      allowed:
+        - "None beyond the date-range WHERE filter. This query is only permitted to describe what already happened at existing discount levels."
+      not_allowed:
+        - "This query must NEVER be used to project or estimate the outcome of a new/hypothetical 25% discount. There is zero historical data at discount levels between 21% and 59% (verified: observed discounts are exactly 0%, 15%, 20%, 60%, 70%, 80% — nothing in between), so a 25% scenario cannot be interpolated from this data with any confidence."
+        - "Do not compute a 'projected profit under 25% discount' by re-multiplying existing sales/profit rows by a new discount factor — that assumes volume and customer behavior stay fixed under a price change, which is an elasticity assumption this dataset contains no evidence for either way."
+    notes:
+      - "This query answers 'what has discounting looked like historically,' not 'what would a 25% promo do.' The honest, fully supportable answer to the business question is: every historical line item with any discount at all except one (the single 15%-discount line, margin +1.2%) has negative aggregate margin (20% discount: -10.8% margin; 60-80% discount: -70% to -170% margin), and profit is strongly negative-correlated with discount depth in this sample. That is a real, checkable pattern. What is NOT supportable is a specific number for a 25% promo, because no data exists in that exact range and no elasticity/volume-response data exists at all — flag this gap explicitly rather than interpolating a projection."
+
+queries_disallowed_pattern_examples:
+  # Not separate metrics — illustrations of the single most common mistake
+  # (skipping the order-grain dedup) so a reader recognizes it on sight.
+  - anti_pattern: "SELECT ship_mode, COUNT(*) FROM orders GROUP BY ship_mode"
+    why_wrong: "Counts line items per ship mode, not orders per ship mode. See orders_by_ship_mode."
+  - anti_pattern: "SELECT COUNT(*) FROM orders"
+    why_wrong: "Counts line items (25), not orders (13), if the caller's intent was order_count."
+
+# =============================================================================
+# QUESTIONS THIS LIBRARY CANNOT ANSWER
+# =============================================================================
+# Listed so an assistant declines cleanly instead of improvising SQL that
+# looks plausible but rests on data that isn't there or isn't sufficient.
+# =============================================================================
+unanswerable:
+
+  - question: "Is sales trending up or down? / What's the growth rate month-over-month? / Are we more discount-heavy than we used to be?"
+    why: >
+      The extract spans only 9 distinct order dates within a 13-day window
+      (Jan 3-13, 2021). There is no month-over-month or seasonal comparison
+      possible — any "trend" computed from this window is noise, not signal.
+      See tiny_sample_size in definitions.yaml.
+
+  - question: "What is our customer repeat-purchase rate / retention rate / customer lifetime value?"
+    why: >
+      Verified: every one of the 13 customers has exactly one order in this
+      extract (max orders-per-customer = 1). There is zero repeat-purchase
+      behavior to measure — any retention or LTV figure would be fabricated
+      from a dataset that structurally cannot contain a second purchase.
+
+  - question: "What is the unit list price of a product, before any discount?"
+    why: >
+      No unit-price or list-price column exists in any source file. sales
+      is a line total that already has quantity and discount baked in. A
+      per-unit list price can only be back-calculated
+      (list_price = sales / quantity / (1 - discount)) as an unverified
+      estimate — flag any such number as derived, not sourced, if computed.
+
+  - question: "What does this product cost us (COGS) on a per-unit basis, independent of what it sold for?"
+    why: >
+      cost can be derived per line item as sales - profit, but that is
+      cost-for-that-transaction (quantity x unit cost), not a standalone
+      per-unit cost figure, and there's no separate cost/COGS column to
+      confirm against. Fine to answer "cost of this line" (sales - profit);
+      not fine to answer "cost per unit of this SKU" as a fixed catalog fact.
+
+  - question: "How does this compare to last year / to a plan or budget / to another store?"
+    why: "No prior-period, budget, or comparison data exists anywhere in the three source files. There is nothing to compare against."
+
+  - question: "Anything involving country/region as a grouping dimension (e.g. 'sales by country')."
+    why: "country_region is single-valued (United States) across all 13 customers — grouping by it returns exactly one bucket, which isn't a meaningful breakdown. Use region or state_province instead."
+
+  - question: "Why did profit drop last quarter? / Why is profit down?"
+    why: >
+      False premise this library cannot verify either way: the entire extract
+      spans 9 distinct order dates within Jan 3-13, 2021 (13 days). There is
+      no second quarter, prior quarter, or any other period in the data to
+      compare against, so it's not knowable from this data whether profit
+      "dropped" at all, let alone why. Answering with a cause (e.g. "discounts
+      increased" or "a region underperformed") would be fabricating both the
+      premise and the explanation. Correct response: state that no comparison
+      period exists in the source data and decline to speculate on cause.
+
+  - question: "What did we spend to acquire these customers? / What is our customer acquisition cost (CAC)?"
+    why: >
+      No marketing spend, advertising cost, or acquisition-channel data exists
+      anywhere in the three source files (customers, orders, products). There
+      is no column to derive this from, even approximately — unlike cost of
+      goods (derivable as sales - profit), there is no cost-side proxy for
+      acquisition spend at all. This must be declined outright, not estimated.
