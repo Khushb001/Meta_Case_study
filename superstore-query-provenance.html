@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Query provenance — Superstore analytics pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#16202B; --ink2:#4A5865; --ink3:#7C8894;
+  --paper:#EFF2F1; --card:#FFFFFF; --rule:#D3DADE; --rule2:#E7ECEE;
+  --pos:#14705A; --posbg:#E4F0EC;
+  --neg:#A6392A; --negbg:#F8E9E6;
+  --stamp:#8A6212; --stampbg:#F6EEDC;
+  --blue:#1F5C8C; --bluebg:#E5EDF4;
+  --disp:'IBM Plex Sans Condensed',sans-serif;
+  --body:'IBM Plex Sans',sans-serif;
+  --mono:'IBM Plex Mono',monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.6;
+  background-image:linear-gradient(var(--rule2) 1px,transparent 1px);background-size:100% 28px}
+.wrap{max-width:940px;margin:0 auto;padding:0 20px 80px}
+
+/* ---- masthead ---- */
+header{padding:56px 0 28px;border-bottom:2px solid var(--ink)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);margin:0 0 14px}
+h1{font-family:var(--disp);font-weight:700;font-size:clamp(34px,6vw,54px);line-height:1.02;letter-spacing:-.015em;margin:0 0 14px}
+.lede{max-width:60ch;color:var(--ink2);margin:0}
+.lede b{color:var(--ink);font-weight:600}
+
+/* ---- kpi strip ---- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(126px,1fr));gap:1px;background:var(--rule);
+  border:1px solid var(--rule);margin:28px 0 0}
+.kpi{background:var(--card);padding:14px 16px}
+.kpi dt{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);margin:0 0 5px}
+.kpi dd{margin:0;font-family:var(--disp);font-size:24px;font-weight:600;letter-spacing:-.01em}
+
+/* ---- pipeline legend ---- */
+.pipe{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:36px 0 8px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2)}
+.pipe span{background:var(--card);border:1px solid var(--rule);padding:5px 9px}
+.pipe i{color:var(--ink3);font-style:normal}
+
+/* ---- question card ---- */
+.card{background:var(--card);border:1px solid var(--rule);margin:30px 0 0}
+.ask{padding:22px 24px 20px;border-bottom:1px dashed var(--rule)}
+.asklab{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);margin:0 0 8px}
+.askq{font-family:var(--disp);font-size:clamp(20px,3.2vw,27px);font-weight:600;line-height:1.2;margin:0;letter-spacing:-.01em}
+
+/* signature: chain-of-custody stamp strip */
+.strip{display:flex;flex-wrap:wrap;background:var(--stampbg);border-bottom:1px solid var(--rule)}
+.strip div{flex:1 1 150px;padding:11px 16px;border-right:1px dashed rgba(138,98,18,.35)}
+.strip div:last-child{border-right:0}
+.strip dt{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--stamp);opacity:.85;margin:0 0 3px}
+.strip dd{margin:0;font-family:var(--mono);font-size:12px;font-weight:500;color:var(--ink);word-break:break-word}
+
+.body{padding:22px 24px 24px}
+.stage{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);
+  margin:26px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--rule2);display:flex;justify-content:space-between}
+.stage:first-child{margin-top:0}
+.stage b{color:var(--blue);font-weight:500}
+p.note{margin:0 0 4px;color:var(--ink2);font-size:14px}
+
+/* ---- chart ---- */
+.chart{margin:6px 0 0}
+.row{display:grid;grid-template-columns:minmax(88px,150px) 1fr auto;gap:12px;align-items:center;padding:7px 0;border-bottom:1px solid var(--rule2)}
+.row:last-child{border-bottom:0}
+.rlab{font-size:13px;font-weight:500;line-height:1.25}
+.rlab em{display:block;font-style:normal;font-family:var(--mono);font-size:10px;color:var(--ink3)}
+.track{position:relative;height:22px;background:linear-gradient(90deg,var(--rule2) 1px,transparent 1px);background-size:25% 100%}
+.bar{position:absolute;top:3px;height:16px;background:var(--blue);min-width:2px}
+.bar.n{background:var(--neg)}
+.rval{font-family:var(--mono);font-size:13px;font-weight:500;text-align:right;white-space:nowrap}
+.mg{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 6px;margin-left:7px;min-width:60px;text-align:right}
+.mg.p{background:var(--posbg);color:var(--pos)}
+.mg.n{background:var(--negbg);color:var(--neg)}
+
+/* ---- big stat ---- */
+.bignum{display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;margin:6px 0 0}
+.bignum .n{font-family:var(--disp);font-size:56px;font-weight:700;letter-spacing:-.02em;color:var(--ink)}
+.bignum .sub{font-family:var(--mono);font-size:12px;color:var(--ink3);max-width:32ch;line-height:1.5}
+
+/* ---- sql ---- */
+details{margin:12px 0 0;border:1px solid var(--rule);background:#FAFBFB}
+summary{cursor:pointer;padding:9px 13px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--blue);list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸ ";display:inline-block;transition:transform .15s}
+details[open] summary::before{content:"▾ "}
+pre{margin:0;padding:0 14px 14px;overflow-x:auto;font-family:var(--mono);font-size:12px;line-height:1.65;color:var(--ink)}
+.kw{color:var(--blue);font-weight:500}
+.ch{color:var(--stamp)}
+.edit{background:#FDF3D6;border-bottom:2px solid var(--stamp);padding:0 2px}
+
+/* ---- callouts ---- */
+.flag{display:flex;gap:11px;margin:16px 0 0;padding:12px 14px;font-size:13.5px;line-height:1.55;border-left:3px solid}
+.flag.warn{background:var(--stampbg);border-color:var(--stamp)}
+.flag.stop{background:var(--negbg);border-color:var(--neg)}
+.flag.ok{background:var(--posbg);border-color:var(--pos)}
+.flag b{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;flex:0 0 auto;padding-top:3px}
+.flag.warn b{color:var(--stamp)} .flag.stop b{color:var(--neg)} .flag.ok b{color:var(--pos)}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:4px 0 0}
+th{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);
+  text-align:left;padding:7px 9px 7px 0;border-bottom:1px solid var(--rule)}
+td{padding:7px 9px 7px 0;border-bottom:1px solid var(--rule2);font-variant-numeric:tabular-nums}
+th.r,td.r{text-align:right;padding-right:0}
+td.mono{font-family:var(--mono);font-size:12.5px}
+.neg{color:var(--neg)}
+
+footer{margin:44px 0 0;padding-top:20px;border-top:2px solid var(--ink);font-size:13px;color:var(--ink2)}
+footer code{font-family:var(--mono);font-size:12px;background:var(--card);border:1px solid var(--rule);padding:1px 5px}
+@media (max-width:560px){
+  .row{grid-template-columns:1fr;gap:4px}
+  .track{height:16px}.bar{top:2px;height:12px}
+  .rval{text-align:left}
+  .bignum .n{font-size:42px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Approved query library · chain of custody</p>
+  <h1>Six questions,<br>traced end to end.</h1>
+  <p class="lede">Every number below came from an entry in <b>queries.yaml</b>, run through <b>run_query.py</b> against a read-only connection — never from a model improvising SQL. Each card shows the whole path: what was asked, which approved query matched, what was allowed to vary, and the exact statement that ran. Two other questions asked in this exercise (a causal "why did profit drop" and customer acquisition cost) are not shown here — they were refused outright, on record, because the source data cannot support an answer.</p>
+
+  <dl class="kpis">
+    <div class="kpi"><dt>Orders</dt><dd>13</dd></div>
+    <div class="kpi"><dt>Line items</dt><dd>25</dd></div>
+    <div class="kpi"><dt>Customers</dt><dd>13</dd></div>
+    <div class="kpi"><dt>Sales</dt><dd>$5,826.89</dd></div>
+    <div class="kpi"><dt>Profit</dt><dd>$1,362.51</dd></div>
+    <div class="kpi"><dt>Margin</dt><dd>23.4%</dd></div>
+    <div class="kpi"><dt>AOV</dt><dd>$448.22</dd></div>
+  </dl>
+</header>
+
+<div class="pipe">
+  <span>question</span><i>→</i><span>instructions.md</span><i>→</i><span>definitions.yaml</span><i>→</i>
+  <span>queries.yaml</span><i>→</i><span>run_query.py</span><i>→</i><span>answer</span>
+</div>
+
+<!-- ============ Q1 ============ -->
+<section class="card">
+  <div class="ask">
+    <p class="asklab">Question 01 · direct match</p>
+    <h2 class="askq">"How did the different product categories perform?"</h2>
+  </div>
+  <dl class="strip">
+    <div><dt>Matched</dt><dd>category_performance</dd></div>
+    <div><dt>Adaptation</dt><dd>none — ran as written</dd></div>
+    <div><dt>Grain</dt><dd>one row per category</dd></div>
+    <div><dt>Basis</dt><dd>25 lines / 13 orders</dd></div>
+  </dl>
+  <div class="body">
+    <div class="stage"><span>Stage 2 · match</span><b>"performance" implies profit, not just revenue</b></div>
+    <p class="note">A "performance" question is answered with <span class="mono">category_performance</span> (sales, profit, margin, units), not the narrower <span class="mono">sales_by_category</span> — that entry only sums revenue and would have hidden the margin story below.</p>
+
+    <div class="stage"><span>Stage 5 · result</span><b>bar chart · sales, margin badge</b></div>
+    <div class="chart">
+      <div class="row"><div class="rlab">Furniture<em>24 units</em></div><div class="track"><div class="bar" style="width:100%"></div></div><div class="rval">$3,592.37<span class="mg p">22.5%</span></div></div>
+      <div class="row"><div class="rlab">Technology<em>9 units</em></div><div class="track"><div class="bar" style="width:32.8%"></div></div><div class="rval">$1,179.14<span class="mg p">27.8%</span></div></div>
+      <div class="row"><div class="rlab">Office Supplies<em>45 units</em></div><div class="track"><div class="bar" style="width:29.4%"></div></div><div class="rval">$1,055.39<span class="mg p">21.5%</span></div></div>
+    </div>
+
+    <div class="flag warn"><b>Grain</b><span>Office Supplies moves the most units (45) but earns the least revenue and has the thinnest margin (21.5%). Technology sells only 9 units yet posts the best margin (27.8%) — volume and profitability rank differently here, so "performing well" needs a metric named, not assumed.</span></div>
+    <div class="flag ok"><b>Note</b><span>All three categories are profitable at the category level — none is a loser here. (One is, at the region and sub-category level — see Question 03 and Question 05.)</span></div>
+
+    <details><summary>SQL executed · category_performance</summary><pre><span class="kw">SELECT</span>  products.category,
+        <span class="kw">SUM</span>(orders.sales)                            <span class="kw">AS</span> total_sales,
+        <span class="kw">SUM</span>(orders.profit)                           <span class="kw">AS</span> total_profit,
+        <span class="kw">SUM</span>(orders.profit) / <span class="kw">NULLIF</span>(<span class="kw">SUM</span>(orders.sales), 0) * 100 <span class="kw">AS</span> profit_margin_pct,
+        <span class="kw">SUM</span>(orders.quantity)                        <span class="kw">AS</span> units_sold
+<span class="kw">FROM</span>    orders <span class="kw">JOIN</span> products <span class="kw">ON</span> orders.product_id = products.product_id
+<span class="kw">GROUP BY</span> products.category
+<span class="kw">ORDER BY</span> total_sales <span class="kw">DESC</span>;</pre></details>
+  </div>
+</section>
+
+<!-- ============ Q2 ============ -->
+<section class="card">
+  <div class="ask">
+    <p class="asklab">Question 02 · direct match, grain matters</p>
+    <h2 class="askq">"How many orders did we get?"</h2>
+  </div>
+  <dl class="strip">
+    <div><dt>Matched</dt><dd>order_count</dd></div>
+    <div><dt>Adaptation</dt><dd>none</dd></div>
+    <div><dt>Grain</dt><dd>distinct orders, not line items</dd></div>
+    <div><dt>Basis</dt><dd>25 lines across 13 orders</dd></div>
+  </dl>
+  <div class="body">
+    <div class="stage"><span>Stage 2 · match</span><b>the trap this dataset sets</b></div>
+    <p class="note"><span class="mono">orders</span> is stored at line-item grain — 25 rows for 13 real orders, because a multi-product order gets one row per product. A plain <span class="mono">COUNT(*)</span> would answer "how many order lines," not "how many orders."</p>
+
+    <div class="stage"><span>Stage 5 · result</span><b>single scalar</b></div>
+    <div class="bignum">
+      <span class="n">13</span>
+      <span class="sub">COUNT(DISTINCT order_id) — the only correct way to count orders on this table. COUNT(*) here would have reported 25.</span>
+    </div>
+
+    <div class="flag warn"><b>Grain</b><span>The largest single order in this extract spans 7 line items. Any metric that touches order-level fields (order date, ship date, ship mode, customer) has to deduplicate to one row per order first, or it double- and triple-counts. <span class="mono">order_count</span> and <span class="mono">orders_by_ship_mode</span> both do this correctly by construction, not by convention.</span></div>
+
+    <details><summary>SQL executed · order_count</summary><pre><span class="kw">SELECT</span>  <span class="kw">COUNT</span>(<span class="kw">DISTINCT</span> order_id) <span class="kw">AS</span> order_count
+<span class="kw">FROM</span>    orders;</pre></details>
+  </div>
+</section>
+
+<!-- ============ Q3 ============ -->
+<section class="card">
+  <div class="ask">
+    <p class="asklab">Question 03 · direct match, hostile result</p>
+    <h2 class="askq">"Which region is losing us money?"</h2>
+  </div>
+  <dl class="strip">
+    <div><dt>Matched</dt><dd>region_profitability</dd></div>
+    <div><dt>Adaptation</dt><dd>none</dd></div>
+    <div><dt>Join required</dt><dd>customers (region lives there)</dd></div>
+    <div><dt>Basis</dt><dd>13 orders / 13 customers</dd></div>
+  </dl>
+  <div class="body">
+    <div class="stage"><span>Stage 1 · definitions</span><b>region is a customer attribute</b></div>
+    <p class="note"><span class="mono">definitions.yaml</span> records that <span class="mono">region</span> sits on <span class="mono">customers</span>, not on <span class="mono">orders</span> — there is no region column on the fact table. Without that being written down first, a model could invent a join or silently fail to find the column.</p>
+
+    <div class="stage"><span>Stage 5 · result</span><b>bar chart · profit, worst first</b></div>
+    <div class="chart">
+      <div class="row"><div class="rlab">Central<em>4 orders · 4 customers</em></div><div class="track"><div class="bar n" style="width:8.3%"></div></div><div class="rval">−$121.48<span class="mg n">−28.1%</span></div></div>
+      <div class="row"><div class="rlab">East<em>3 orders · 3 customers</em></div><div class="track"><div class="bar" style="width:2%"></div></div><div class="rval">$5.44<span class="mg p">16.5%</span></div></div>
+      <div class="row"><div class="rlab">West<em>2 orders · 2 customers</em></div><div class="track"><div class="bar" style="width:2%"></div></div><div class="rval">$19.83<span class="mg p">5.3%</span></div></div>
+      <div class="row"><div class="rlab">South<em>4 orders · 4 customers</em></div><div class="track"><div class="bar" style="width:100%"></div></div><div class="rval">$1,458.73<span class="mg p">29.2%</span></div></div>
+    </div>
+
+    <div class="flag stop"><b>Answer</b><span>Central is the only region with negative profit: −$121.48 on $432.21 of sales, a −28.1% margin. It's driven mainly by two loss-making line items — a Storage line at −$64.77 and a Furnishings line at −$29.33 — both carrying discounts of 20% or more.</span></div>
+    <div class="flag warn"><b>Caveat</b><span>South looks best (+$1,458.73), but 92% of that ($1,343.48) comes from a single customer's single order (Maria Etezadi, ME-17320). Every region here rests on just 2–4 orders — this is directional on this sample, not a stable regional trend.</span></div>
+
+    <details><summary>SQL executed · region_profitability</summary><pre><span class="kw">SELECT</span>  customers.region,
+        <span class="kw">SUM</span>(orders.sales)   <span class="kw">AS</span> total_sales,
+        <span class="kw">SUM</span>(orders.profit)  <span class="kw">AS</span> total_profit
+<span class="kw">FROM</span>    orders <span class="kw">JOIN</span> customers <span class="kw">ON</span> orders.customer_id = customers.customer_id
+<span class="kw">GROUP BY</span> customers.region
+<span class="kw">ORDER BY</span> total_profit <span class="kw">ASC</span>;</pre></details>
+  </div>
+</section>
+
+<!-- ============ Q4 ============ -->
+<section class="card">
+  <div class="ask">
+    <p class="asklab">Question 04 · direct match, ambiguous word</p>
+    <h2 class="askq">"Who are our best customers?"</h2>
+  </div>
+  <dl class="strip">
+    <div><dt>Matched</dt><dd>top_customers_by_value</dd></div>
+    <div><dt>Adaptation</dt><dd>n = 5, default sort (profit)</dd></div>
+    <div><dt>Grain</dt><dd>one row per customer</dd></div>
+    <div><dt>Basis</dt><dd>13 orders / 13 customers</dd></div>
+  </dl>
+  <div class="body">
+    <div class="stage"><span>Stage 2a · disambiguate</span><b>"best" is not a column</b></div>
+    <p class="note">The library defaults <span class="mono">top_customers_by_value</span> to <span class="mono">ORDER BY total_profit DESC</span> and says so explicitly, because "best" sorted by revenue instead produces a materially different — and worse — answer (see flag below).</p>
+
+    <div class="stage"><span>Stage 5 · result</span><b>ranked by profit (default)</b></div>
+    <table>
+      <thead><tr><th>Customer</th><th class="r">Sales</th><th class="r">Profit</th></tr></thead>
+      <tbody>
+        <tr><td>Maria Etezadi <em style="color:var(--ink3);font-style:normal">ME-17320</em></td><td class="r mono">$4,374.88</td><td class="r mono">$1,343.48</td></tr>
+        <tr><td>Natalie DeCherney <em style="color:var(--ink3);font-style:normal">ND-18370</em></td><td class="r mono">$545.94</td><td class="r mono">$87.35</td></tr>
+        <tr><td>Anthony Jacobs <em style="color:var(--ink3);font-style:normal">AJ-10780</em></td><td class="r mono">$54.83</td><td class="r mono">$22.65</td></tr>
+        <tr><td>Melanie Seite <em style="color:var(--ink3);font-style:normal">MS-17830</em></td><td class="r mono">$40.54</td><td class="r mono">$10.92</td></tr>
+        <tr><td>Brian Dahlen <em style="color:var(--ink3);font-style:normal">BD-11605</em></td><td class="r mono">$353.90</td><td class="r mono">$10.50</td></tr>
+      </tbody>
+    </table>
+
+    <div class="flag stop"><b>If sorted by sales instead</b><span>The same top-5 slot ranked by revenue instead of profit would seat PO-19195 (−$65.99 profit) and VS-21820 (−$71.96 profit) — two customers who lost money — inside a "best customers" list. That single word choice (profit vs. sales) changes who a reader would call up to say thank you.</span></div>
+    <div class="flag warn"><b>Scope</b><span>Every customer in this extract has exactly one order — this ranks single-order value, not loyalty, retention, or lifetime value. Maria Etezadi is unambiguously #1 either way, at more than 3x the next customer on both metrics.</span></div>
+
+    <details><summary>SQL executed · top_customers_by_value</summary><pre><span class="kw">SELECT</span>  customers.customer_id, customers.customer_name,
+        <span class="kw">SUM</span>(orders.sales)   <span class="kw">AS</span> total_sales,
+        <span class="kw">SUM</span>(orders.profit)  <span class="kw">AS</span> total_profit
+<span class="kw">FROM</span>    orders <span class="kw">JOIN</span> customers <span class="kw">ON</span> orders.customer_id = customers.customer_id
+<span class="kw">GROUP BY</span> customers.customer_id, customers.customer_name
+<span class="kw">ORDER BY</span> total_profit <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="edit">:n</span>;</pre></details>
+  </div>
+</section>
+
+<!-- ============ Q5 ============ -->
+<section class="card">
+  <div class="ask">
+    <p class="asklab">Question 05 · adapted within bounds</p>
+    <h2 class="askq">"Break the category numbers down one level further, worst margin first."</h2>
+  </div>
+  <dl class="strip">
+    <div><dt>Matched</dt><dd>category_performance</dd></div>
+    <div><dt>Adaptation</dt><dd>dimension + order_by</dd></div>
+    <div><dt>Authorised by</dt><dd>subcategory_margin_ranked</dd></div>
+    <div><dt>Basis</dt><dd>25 lines / 11 sub-categories</dd></div>
+  </dl>
+  <div class="body">
+    <div class="stage"><span>Stage 3 · adapt</span><b>two edits, both declared in advance</b></div>
+    <p class="note">Swapping <span class="mono">category → sub_category</span> is permitted because both columns sit on the already-joined <span class="mono">products</span> table — no new table, no new aggregation, no grain change. This adaptation is registered ahead of time as its own approved entry (<span class="mono">subcategory_margin_ranked</span>), not improvised on the spot. Swapping in <span class="mono">region</span> here would have been rejected — that column lives on <span class="mono">customers</span>, a table this query doesn't join.</p>
+
+    <div class="stage"><span>Stage 5 · result</span><b>worst five of eleven, plus the best</b></div>
+    <table>
+      <thead><tr><th>Sub-category</th><th class="r">Sales</th><th class="r">Profit</th><th class="r">Margin</th></tr></thead>
+      <tbody>
+        <tr><td>Storage</td><td class="r mono">$272.74</td><td class="r mono neg">−$64.77</td><td class="r mono neg">−23.8%</td></tr>
+        <tr><td>Furnishings</td><td class="r mono">$138.61</td><td class="r mono neg">−$29.33</td><td class="r mono neg">−21.2%</td></tr>
+        <tr><td>Fasteners</td><td class="r mono">$31.12</td><td class="r mono">$0.31</td><td class="r mono">1.0%</td></tr>
+        <tr><td>Bookcases</td><td class="r mono">$334.00</td><td class="r mono">$3.93</td><td class="r mono">1.2%</td></tr>
+        <tr><td>Chairs</td><td class="r mono">$3,119.76</td><td class="r mono">$833.76</td><td class="r mono">26.7%</td></tr>
+        <tr><td>Paper <em style="color:var(--ink3);font-style:normal">(best of 11)</em></td><td class="r mono">$42.43</td><td class="r mono">$17.89</td><td class="r mono">42.2%</td></tr>
+      </tbody>
+    </table>
+
+    <div class="flag warn"><b>Sample size</b><span>Storage, Bookcases, Fasteners, and Accessories are each backed by 1–4 line items. Storage's −23.8% margin is one loss-making transaction, not an averaged trend — reported with that caveat attached, not as a stable sub-category economics fact.</span></div>
+
+    <details open><summary>SQL executed · subcategory_margin_ranked (adapted from category_performance)</summary><pre><span class="kw">SELECT</span>  products.category, products.<span class="edit">sub_category</span>,
+        <span class="kw">SUM</span>(orders.sales)                            <span class="kw">AS</span> total_sales,
+        <span class="kw">SUM</span>(orders.profit)                           <span class="kw">AS</span> total_profit,
+        <span class="kw">SUM</span>(orders.profit) / <span class="kw">NULLIF</span>(<span class="kw">SUM</span>(orders.sales), 0) * 100 <span class="kw">AS</span> profit_margin_pct
+<span class="kw">FROM</span>    orders <span class="kw">JOIN</span> products <span class="kw">ON</span> orders.product_id = products.product_id
+<span class="kw">GROUP BY</span> products.category, products.<span class="edit">sub_category</span>
+<span class="kw">ORDER BY</span> <span class="edit">profit_margin_pct ASC</span>;</pre></details>
+  </div>
+</section>
+
+<!-- ============ Q6 ============ -->
+<section class="card">
+  <div class="ask">
+    <p class="asklab">Question 06 · answered, extrapolation refused</p>
+    <h2 class="askq">"We're thinking about a blanket 25% discount promotion. What does the data say?"</h2>
+  </div>
+  <dl class="strip">
+    <div><dt>Matched</dt><dd>discount_level_margin_relationship</dd></div>
+    <div><dt>Adaptation</dt><dd>none</dd></div>
+    <div><dt>Grain</dt><dd>line items, by observed discount</dd></div>
+    <div><dt>Basis</dt><dd>25 lines / 6 discount levels</dd></div>
+  </dl>
+  <div class="body">
+    <div class="stage"><span>Stage 5 · result</span><b>bar chart · sales, profit signed</b></div>
+    <div class="chart">
+      <div class="row"><div class="rlab">0% — none<em>14 lines</em></div><div class="track"><div class="bar" style="width:100%"></div></div><div class="rval">+$1,477.70<span class="mg p">29.3%</span></div></div>
+      <div class="row"><div class="rlab">15%<em>1 line</em></div><div class="track"><div class="bar" style="width:6.6%"></div></div><div class="rval">+$3.93<span class="mg p">1.2%</span></div></div>
+      <div class="row"><div class="rlab">20%<em>6 lines</em></div><div class="track"><div class="bar n" style="width:7.2%"></div></div><div class="rval">−$39.15<span class="mg n">−10.8%</span></div></div>
+      <div class="row"><div class="rlab">21–59%<em>no data</em></div><div class="track"></div><div class="rval">—</div></div>
+      <div class="row"><div class="rlab">60%<em>1 line</em></div><div class="track"><div class="bar n" style="width:1.5%"></div></div><div class="rval">−$53.71<span class="mg n">−70.0%</span></div></div>
+      <div class="row"><div class="rlab">70%<em>1 line</em></div><div class="track"><div class="bar n" style="width:2%"></div></div><div class="rval">−$2.52<span class="mg n">−73.3%</span></div></div>
+      <div class="row"><div class="rlab">80%<em>2 lines</em></div><div class="track"><div class="bar n" style="width:2%"></div></div><div class="rval">−$23.74<span class="mg n">−169.9%</span></div></div>
+    </div>
+
+    <div class="flag ok"><b>Answer</b><span>Every discounted band except 15% shows negative aggregate margin, and margin falls sharply as the discount deepens: 0% → +29.3%, 20% → −10.8%, 60–80% → −70% to −170%. Margin crosses into loss somewhere between 15% and 20% off.</span></div>
+    <div class="flag stop"><b>What this does not tell you</b><span>No historical line item sits between 21% and 59% discount — the data jumps straight from 20% to 60%. A 25% blanket promo cannot be interpolated from this table with any confidence: doing so would assume volume and customer behavior stay fixed under a new price point, an assumption this dataset contains zero evidence for either way. This query can describe what discounting has looked like historically; it cannot forecast a scenario the data has never seen.</span></div>
+
+    <details><summary>SQL executed · discount_level_margin_relationship</summary><pre><span class="kw">SELECT</span>  discount,
+        <span class="kw">COUNT</span>(*)                                <span class="kw">AS</span> n_line_items,
+        <span class="kw">SUM</span>(sales)                              <span class="kw">AS</span> total_sales,
+        <span class="kw">SUM</span>(profit)                             <span class="kw">AS</span> total_profit,
+        <span class="kw">SUM</span>(profit) / <span class="kw">NULLIF</span>(<span class="kw">SUM</span>(sales), 0) * 100 <span class="kw">AS</span> profit_margin_pct
+<span class="kw">FROM</span>    orders
+<span class="kw">GROUP BY</span> discount
+<span class="kw">ORDER BY</span> discount <span class="kw">ASC</span>;</pre></details>
+  </div>
+</section>
+
+<footer>
+  <p>All figures computed from <code>SS_Customers.xlsx</code>, <code>SS_Orders_Products.xlsx</code>, and <code>SS_Products.xlsx</code>, loaded by <code>load_data.py</code> into <code>customers</code>, <code>orders</code>, <code>products</code>. Window 2021-01-03 to 2021-01-13 — 13 orders, 25 line items, 13 customers, 25 products, 3 categories. Two of the eight original business questions ("why did profit drop last quarter" and customer acquisition cost) are declared in <code>queries.yaml</code>'s <code>unanswerable:</code> list and refused, not shown here. Library validated by <code>tests/validate.py</code>: 24/24 checks passed — GATE PASSED.</p>
+</footer>
+
+</div>
+</body>
+</html>
